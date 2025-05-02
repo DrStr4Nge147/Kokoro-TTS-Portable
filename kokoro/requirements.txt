@@ -1,0 +1,16 @@
+numpy
+scipy
+tqdm
+wheel
+setuptools
+huggingface-hub
+pydub
+soundfile
+gradio
+transformers
+accelerate
+diffusers
+espeakng-loader
+phonemizer-fork
+kokoro
+misaki
