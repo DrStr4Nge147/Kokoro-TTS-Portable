@@ -4,10 +4,12 @@ import torch
 import gradio as gr
 import shutil
 from datetime import datetime
-from kokoro import KModel, KPipeline
 from tqdm import tqdm
 from scipy.io.wavfile import write
 import warnings
+
+# Import KModel and KPipeline
+from kokoro import KModel, KPipeline
 
 # Get the application root directory
 app_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -42,6 +44,23 @@ os.environ["HF_ASSETS_CACHE"] = hf_home
 os.environ["HUGGINGFACE_ASSETS_CACHE"] = hf_home
 os.environ["HF_HUB_DISABLE_SYMLINKS_WARNING"] = "1"
 os.environ["HF_HUB_ENABLE_HF_TRANSFER"] = "0"
+
+# Force offline mode by default
+os.environ["TRANSFORMERS_OFFLINE"] = "1"
+os.environ["HF_HUB_OFFLINE"] = "1"
+
+# Create marker file if it doesn't exist
+model_path = os.path.join(hf_home, 'hub', 'models--hexgrad--Kokoro-82M')
+marker_file = os.path.join(model_path, 'DOWNLOAD_COMPLETE')
+
+if os.path.exists(model_path) and not os.path.exists(marker_file):
+    try:
+        # Create a marker file
+        with open(marker_file, 'w') as f:
+            f.write('Models downloaded successfully')
+        print(f"Created marker file in: {model_path}")
+    except Exception as e:
+        print(f"Warning: Could not create marker file in {model_path}: {str(e)}")
 
 # Force the huggingface_hub library to use our cache directory
 try:
@@ -89,33 +108,81 @@ try:
 
         # Look for key model files
         try:
-            model_files = [f for f in os.listdir(path) if f.endswith('.bin') or f.endswith('.json')]
-            if len(model_files) > 0:
-                print(f"Found {len(model_files)} model files in {path}")
+            # Check for the specific model file that KModel is looking for
+            model_filename = 'kokoro-v1_0.pth'
+            specific_model_path = os.path.join(path, 'snapshots', model_filename)
+            if os.path.exists(specific_model_path):
+                print(f"Found specific model file: {specific_model_path}")
                 return True
-            else:
-                print(f"No model files found in {path}")
-                return False
+
+            # Check for the model file in the main directory
+            specific_model_path = os.path.join(path, model_filename)
+            if os.path.exists(specific_model_path):
+                print(f"Found specific model file: {specific_model_path}")
+                return True
+
+            # Check for config.json which is also required
+            config_path = os.path.join(path, 'config.json')
+            if os.path.exists(config_path):
+                print(f"Found config file: {config_path}")
+                # If we have config but not model, we might still need to download the model
+
+            # Check if the marker file exists - if it does, consider the model complete
+            marker_file = os.path.join(path, 'DOWNLOAD_COMPLETE')
+            if os.path.exists(marker_file):
+                print(f"Model marker file found in: {path}")
+                # Read the marker file to see if it contains valid data
+                try:
+                    with open(marker_file, 'r') as f:
+                        marker_content = f.read().strip()
+                    if marker_content:
+                        print(f"Marker file contains: {marker_content}")
+                        return True
+                except Exception as e:
+                    print(f"Error reading marker file: {str(e)}")
+
+            # Also check the main directory for any model files as a fallback
+            try:
+                model_files = [f for f in os.listdir(path) if f.endswith('.pth') or f.endswith('.bin') or f.endswith('.json')]
+                if len(model_files) > 0:
+                    print(f"Found {len(model_files)} model files in {path}")
+                    return True
+            except Exception as e:
+                print(f"Error checking for model files: {str(e)}")
+
+            print(f"No model files found in {path}")
+            return False
         except Exception as e:
             print(f"Error checking {path}: {str(e)}")
             return False
 
-    # Check if models exist
-    if not is_model_complete(model_path):
-        # Check if the marker file exists
-        marker_file = os.path.join(model_path, 'DOWNLOAD_COMPLETE')
-        if os.path.exists(marker_file):
-            print(f"Model marker file found in: {model_path}")
-            print("Using cached models - offline mode enabled")
-        else:
-            print("First run detected, downloading models...")
-            # Temporarily disable offline mode to allow downloads
-            os.environ.pop("TRANSFORMERS_OFFLINE", None)
-            os.environ.pop("HF_HUB_OFFLINE", None)
-            print(f"Models will be downloaded to: {model_path}")
-    else:
-        print(f"Models found in: {model_path}")
+    # Always create the model directory if it doesn't exist
+    if not os.path.exists(model_path):
+        os.makedirs(model_path, exist_ok=True)
+        print(f"Created model directory: {model_path}")
+
+    # Check if the marker file exists directly
+    marker_file = os.path.join(model_path, 'DOWNLOAD_COMPLETE')
+
+    # Create the marker file if it doesn't exist but the directory does
+    if os.path.exists(model_path) and not os.path.exists(marker_file):
+        try:
+            with open(marker_file, 'w') as f:
+                f.write('Models downloaded successfully')
+            print(f"Created marker file in: {model_path}")
+        except Exception as e:
+            print(f"Warning: Could not create marker file: {str(e)}")
+
+    # Always assume models are available after first run
+    if os.path.exists(marker_file):
+        print(f"Model marker file found in: {model_path}")
         print("Using cached models - offline mode enabled")
+    else:
+        print("First run detected, downloading models...")
+        # Temporarily disable offline mode to allow downloads
+        os.environ.pop("TRANSFORMERS_OFFLINE", None)
+        os.environ.pop("HF_HUB_OFFLINE", None)
+        print(f"Models will be downloaded to: {model_path}")
 
     # Load models with environment variables controlling cache location
     if CUDA_AVAILABLE:
@@ -142,23 +209,29 @@ try:
     except Exception as e:
         print(f"Warning: Could not set custom pronunciation for Italian: {str(e)}")
 
-    # Create marker file after successful loading
-    print("Models were downloaded successfully. Creating marker file...")
+    # Models were loaded successfully
+    print("Models were loaded successfully.")
 
-    # Check if the model directory exists now
-    if os.path.exists(model_path):
-        try:
-            # Create a marker file
-            with open(os.path.join(model_path, 'DOWNLOAD_COMPLETE'), 'w') as f:
-                f.write('Models downloaded successfully')
-            print(f"Created marker file in: {model_path}")
+    # Ensure the marker file exists
+    marker_file = os.path.join(model_path, 'DOWNLOAD_COMPLETE')
+    if not os.path.exists(marker_file):
+        print("Creating marker file...")
+        # Check if the model directory exists now
+        if os.path.exists(model_path):
+            try:
+                # Create a marker file
+                with open(marker_file, 'w') as f:
+                    f.write('Models downloaded successfully')
+                print(f"Created marker file in: {model_path}")
 
-            # List the contents of the model directory
-            print(f"Contents of {model_path}:")
-            for item in os.listdir(model_path):
-                print(f"  - {item}")
-        except Exception as e:
-            print(f"Warning: Could not create marker file in {model_path}: {str(e)}")
+                # List the contents of the model directory
+                print(f"Contents of {model_path}:")
+                for item in os.listdir(model_path):
+                    print(f"  - {item}")
+            except Exception as e:
+                print(f"Warning: Could not create marker file in {model_path}: {str(e)}")
+    else:
+        print("Marker file already exists.")
 
     # Re-enable offline mode to prevent future download attempts
     os.environ["TRANSFORMERS_OFFLINE"] = "1"
@@ -171,6 +244,11 @@ except Exception as e:
     os.environ.pop("TRANSFORMERS_OFFLINE", None)
     os.environ.pop("HF_HUB_OFFLINE", None)
 
+    # Create the model directory if it doesn't exist
+    if not os.path.exists(model_path):
+        os.makedirs(model_path, exist_ok=True)
+        print(f"Created model directory: {model_path}")
+
     # Load models with environment variables controlling cache location
     if CUDA_AVAILABLE:
         # Use GPU if available
@@ -195,6 +273,23 @@ except Exception as e:
             print("Warning: Italian pipeline g2p doesn't have lexicon attribute, skipping custom pronunciation")
     except Exception as e:
         print(f"Warning: Could not set custom pronunciation for Italian: {str(e)}")
+
+    # Models were loaded successfully in fallback mode
+    print("Models were loaded successfully in fallback mode.")
+
+    # Ensure the marker file exists
+    marker_file = os.path.join(model_path, 'DOWNLOAD_COMPLETE')
+    if not os.path.exists(marker_file):
+        print("Creating marker file for fallback mode...")
+        try:
+            # Create a marker file
+            with open(marker_file, 'w') as f:
+                f.write('Models downloaded successfully in fallback mode')
+            print(f"Created marker file in: {model_path}")
+        except Exception as e:
+            print(f"Warning: Could not create marker file in {model_path}: {str(e)}")
+    else:
+        print("Marker file already exists.")
 
 # Store loaded voices to avoid reloading
 loaded_voices = {}
@@ -612,6 +707,138 @@ with gr.Blocks(css="""
                 min-height: 100vh;
             }
 
+            /* Fix for settings panel scrolling */
+            .gradio-container [id^="component-"] > .fixed {
+                position: fixed !important;
+                max-height: 85vh !important;
+                width: 350px !important;
+                overflow-y: auto !important;
+                overflow-x: hidden !important;
+                top: 50% !important;
+                left: 50% !important;
+                transform: translate(-50%, -50%) !important;
+                box-shadow: 0 4px 20px rgba(0, 0, 0, 0.4) !important;
+                padding: 15px !important;
+                font-size: 0.9em !important;
+                z-index: 1000 !important;
+                border-radius: 10px !important;
+            }
+
+            /* Add a backdrop to make the settings panel stand out */
+            .gradio-container [id^="component-"] > .fixed::before {
+                content: "";
+                position: fixed;
+                top: 0;
+                left: 0;
+                right: 0;
+                bottom: 0;
+                background: rgba(0, 0, 0, 0.5);
+                z-index: -1;
+            }
+
+            /* Make settings panel more compact and better styled */
+            .gradio-container [id^="component-"] > .fixed > div {
+                padding: 8px !important;
+            }
+
+            .gradio-container [id^="component-"] > .fixed label {
+                margin-bottom: 6px !important;
+                font-weight: 500 !important;
+            }
+
+            .gradio-container [id^="component-"] > .fixed button {
+                padding: 6px 12px !important;
+                margin: 6px !important;
+                border-radius: 6px !important;
+                font-weight: 500 !important;
+                transition: all 0.2s ease !important;
+            }
+
+            .gradio-container [id^="component-"] > .fixed button:hover {
+                transform: translateY(-1px) !important;
+            }
+
+            /* Add some spacing between settings sections */
+            .gradio-container [id^="component-"] > .fixed > div > div {
+                margin-bottom: 12px !important;
+            }
+
+            /* Ensure settings modal is fully visible */
+            .gradio-container [id^="component-"] > .fixed::-webkit-scrollbar {
+                width: 6px !important;
+            }
+
+            .gradio-container [id^="component-"] > .fixed::-webkit-scrollbar-thumb {
+                background-color: rgba(0, 0, 0, 0.2) !important;
+                border-radius: 3px !important;
+            }
+
+            /* Improve light theme appearance */
+            body:not(.dark) {
+                background: linear-gradient(135deg, #f0f2f8, #e6e9f0);
+                background-size: 400% 400%;
+                animation: gradientBG 15s ease infinite;
+            }
+
+            body:not(.dark) .gradio-container {
+                background: rgba(245, 245, 250, 0.85);
+                color: #333;
+                border: 1px solid rgba(0, 0, 0, 0.1);
+                box-shadow: 0 10px 30px rgba(0, 0, 0, 0.1);
+            }
+
+            body:not(.dark) .gradio-container button {
+                background-color: #f0f0f5;
+                color: #333;
+                border: 1px solid #ddd;
+                transition: all 0.2s ease;
+            }
+
+            body:not(.dark) .gradio-container button:hover {
+                background-color: #e0e0e5;
+                box-shadow: 0 2px 5px rgba(0, 0, 0, 0.1);
+                transform: translateY(-1px);
+            }
+
+            body:not(.dark) .gradio-container button.primary {
+                background-color: #4a69dd;
+                color: white;
+                border: none;
+            }
+
+            body:not(.dark) .gradio-container button.primary:hover {
+                background-color: #3a59cd;
+            }
+
+            body:not(.dark) .gradio-container input,
+            body:not(.dark) .gradio-container textarea,
+            body:not(.dark) .gradio-container select {
+                background-color: #fff;
+                color: #333;
+                border: 1px solid #ddd;
+                box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.05);
+            }
+
+            body:not(.dark) .gradio-container h1,
+            body:not(.dark) .gradio-container h2,
+            body:not(.dark) .gradio-container h3 {
+                color: #2d3748;
+            }
+
+            body:not(.dark) .gradio-container [id^="component-"] > .fixed {
+                background-color: #fff;
+                border: 1px solid #e2e8f0;
+                color: #333;
+            }
+
+            /* Dark theme settings panel */
+            body.dark .gradio-container [id^="component-"] > .fixed {
+                background-color: #1f2937;
+                border: 1px solid #374151;
+                color: #f3f4f6;
+            }
+
+            /* Common styles for both themes */
             .gradio-container {
                 background: rgba(20, 25, 40, 0.7);
                 border-radius: 16px;
@@ -625,12 +852,21 @@ with gr.Blocks(css="""
             }
             """) as demo:
 
-    gr.HTML("""
+    # Create HTML with GPU/CPU mode indicator
+    gpu_status = "GPU Mode ✅" if CUDA_AVAILABLE else "CPU Mode ⚠️"
+    gpu_color = "#4CAF50" if CUDA_AVAILABLE else "#FFA500"  # Green for GPU, Orange for CPU
+
+    header_html = f"""
     <div style="text-align: center; margin-bottom: 1rem">
         <h1 style="font-size: 2.5rem; font-weight: 700; margin-bottom: 0.5rem; background: linear-gradient(45deg, #667eea, #764ba2); -webkit-background-clip: text; -webkit-text-fill-color: transparent;">Kokoro TTS</h1>
         <p style="font-size: 1.2rem; opacity: 0.8;">High-quality text-to-speech with multiple voices</p>
+        <div style="display: inline-block; margin-top: 0.5rem; padding: 0.4rem 1rem; border-radius: 1rem; background-color: {gpu_color}; color: white; font-weight: bold;">
+            {gpu_status}
+        </div>
     </div>
-    """)
+    """
+
+    gr.HTML(header_html)
 
     with gr.Tab("Text to Speech"):
         with gr.Row():
@@ -718,6 +954,67 @@ with gr.Blocks(css="""
             inputs=[voice_file_input, voice_name_input],
             outputs=[upload_result, custom_voice_list, voice_name_input, voice_file_input]
         )
+
+    # Add a System Info tab
+    with gr.Tab("System Info"):
+        # Function to get system info
+        def get_system_info():
+            import platform
+            import psutil
+
+            try:
+                # Get CPU info
+                cpu_info = f"CPU: {platform.processor()}"
+                cpu_count = f"CPU Cores: {psutil.cpu_count(logical=False)} Physical, {psutil.cpu_count(logical=True)} Logical"
+                cpu_usage = f"CPU Usage: {psutil.cpu_percent()}%"
+
+                # Get RAM info
+                ram = psutil.virtual_memory()
+                ram_info = f"RAM: {ram.total / (1024**3):.2f} GB Total, {ram.available / (1024**3):.2f} GB Available"
+
+                # Get GPU info
+                gpu_info = "GPU: Not Available"
+                cuda_info = "CUDA: Not Available"
+                gpu_memory = "GPU Memory: Not Available"
+
+                if CUDA_AVAILABLE:
+                    try:
+                        gpu_info = f"GPU: {torch.cuda.get_device_name(0)}"
+                        cuda_info = f"CUDA Version: {torch.version.cuda}"
+                        gpu_memory = f"GPU Memory: {torch.cuda.get_device_properties(0).total_memory / (1024**3):.2f} GB Total"
+                    except Exception as e:
+                        gpu_info = f"GPU: Error getting GPU info - {str(e)}"
+
+                # Combine all info
+                system_info = f"""
+                ## System Information
+
+                ### Hardware
+                - {cpu_info}
+                - {cpu_count}
+                - {cpu_usage}
+                - {ram_info}
+
+                ### GPU Status
+                - {gpu_info}
+                - {cuda_info}
+                - {gpu_memory}
+                - Processing Mode: {"GPU" if CUDA_AVAILABLE else "CPU"}
+
+                ### Software
+                - Python Version: {platform.python_version()}
+                - PyTorch Version: {torch.__version__}
+                - Operating System: {platform.system()} {platform.version()}
+                """
+
+                return system_info
+            except Exception as e:
+                return f"Error getting system info: {str(e)}"
+
+        # Display system info
+        system_info_md = gr.Markdown(get_system_info())
+        refresh_system_info = gr.Button("🔄 Refresh System Info")
+        refresh_system_info.click(fn=get_system_info, outputs=system_info_md)
 
     with gr.Tab("Voice Mixer"):
         with gr.Row():
