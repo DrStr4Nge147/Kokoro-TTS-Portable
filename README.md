@@ -24,7 +24,7 @@ A high-quality, portable text-to-speech application with multiple voices and lan
 
 ### Standard Installation
 
-1. Download and extract this folder to any location on your computer
+1. Clone this github repo to any location on your computer
 2. Run `install.bat` to set up the embedded Python and install all required dependencies
 3. Wait for the installation to complete (this may take several minutes)
 4. Run `run.bat` to start the application
