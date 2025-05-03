@@ -14,6 +14,14 @@ if not exist system (
     exit /b 1
 )
 
+REM Check if Python is installed in the system directory
+if not exist system\python.exe (
+    echo Error: Python executable not found in system directory.
+    echo Please run install.bat first to set up the application.
+    pause
+    exit /b 1
+)
+
 REM Set environment variables first to ensure models are downloaded to the correct location
 call environment.bat
 
@@ -21,6 +29,121 @@ REM Set additional environment variables for better portability
 set PYTHONPATH=%~dp0
 set PYTHONHOME=%~dp0system
 set PHONEMIZER_ESPEAK_LIBRARY=%~dp0system\Lib\site-packages\espeakng_loader\espeak-ng.dll
+
+REM Check if PyTorch is already installed
+echo Checking if PyTorch is already installed...
+system\python.exe -c "import torch; print('PyTorch is already installed. Version:', torch.__version__); print('CUDA Available:', torch.cuda.is_available()); exit(0)" > "%TEMP%\pytorch_check.txt" 2>&1
+set PYTORCH_INSTALLED=0
+set PYTORCH_CUDA_INSTALLED=0
+
+REM Check if the import was successful (exit code 0)
+if %ERRORLEVEL% EQU 0 (
+    set PYTORCH_INSTALLED=1
+    type "%TEMP%\pytorch_check.txt"
+
+    REM Check if CUDA is available in PyTorch
+    findstr /C:"CUDA Available: True" "%TEMP%\pytorch_check.txt" > nul
+    if not errorlevel 1 (
+        set PYTORCH_CUDA_INSTALLED=1
+        echo CUDA support detected in PyTorch.
+    ) else (
+        echo PyTorch is installed but without CUDA support.
+    )
+) else (
+    echo PyTorch is not installed.
+)
+
+REM Check for CUDA availability on the system
+echo Checking for CUDA availability...
+set CUDA_AVAILABLE=0
+
+REM Check if nvidia-smi is available
+where nvidia-smi > nul 2>&1
+if %ERRORLEVEL% EQU 0 (
+    echo NVIDIA GPU detected via nvidia-smi.
+    set CUDA_AVAILABLE=1
+) else (
+    REM Check if nvcc is available
+    where nvcc > nul 2>&1
+    if %ERRORLEVEL% EQU 0 (
+        echo CUDA toolkit found via nvcc.
+        set CUDA_AVAILABLE=1
+    ) else (
+        REM Check registry for NVIDIA driver
+        reg query "HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Services\nvlddmkm" > nul 2>&1
+        if %ERRORLEVEL% EQU 0 (
+            echo NVIDIA driver found in registry.
+            set CUDA_AVAILABLE=1
+        ) else (
+            echo No CUDA support detected on this system.
+        )
+    )
+)
+
+REM Install or upgrade PyTorch based on the checks
+if %PYTORCH_INSTALLED% EQU 0 (
+    echo Installing PyTorch...
+
+    if %CUDA_AVAILABLE% EQU 1 (
+        echo Installing PyTorch with CUDA support...
+        system\python.exe -m pip install --no-cache-dir torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
+
+        REM Verify CUDA is available in PyTorch
+        echo Verifying CUDA installation...
+        system\python.exe -c "import torch; print('CUDA Available after installation:', torch.cuda.is_available()); exit(0 if torch.cuda.is_available() else 1)" > "%TEMP%\cuda_verify.txt" 2>&1
+
+        if %ERRORLEVEL% NEQ 0 (
+            echo CUDA installation verification failed. Falling back to CPU version...
+            echo Uninstalling current PyTorch...
+            system\python.exe -m pip uninstall -y torch torchvision torchaudio
+            echo Installing PyTorch CPU version...
+            system\python.exe -m pip install --no-cache-dir torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
+        ) else (
+            type "%TEMP%\cuda_verify.txt"
+            echo CUDA installation verified successfully.
+        )
+    ) else (
+        echo Installing PyTorch CPU version...
+        system\python.exe -m pip install --no-cache-dir torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
+    )
+) else (
+    REM Check if we need to upgrade PyTorch to use CUDA
+    if %PYTORCH_CUDA_INSTALLED% EQU 0 (
+        if %CUDA_AVAILABLE% EQU 1 (
+            echo PyTorch is installed but without CUDA support. Upgrading to CUDA version...
+            echo Uninstalling current PyTorch...
+            system\python.exe -m pip uninstall -y torch torchvision torchaudio
+
+            echo Installing PyTorch with CUDA support...
+            system\python.exe -m pip install --no-cache-dir torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
+
+            REM Verify CUDA is available in PyTorch
+            echo Verifying CUDA installation...
+            system\python.exe -c "import torch; print('CUDA Available after upgrade:', torch.cuda.is_available()); exit(0 if torch.cuda.is_available() else 1)" > "%TEMP%\cuda_verify.txt" 2>&1
+
+            if %ERRORLEVEL% NEQ 0 (
+                echo CUDA installation verification failed. Falling back to CPU version...
+                echo Installing PyTorch CPU version...
+                system\python.exe -m pip install --no-cache-dir torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
+            ) else (
+                type "%TEMP%\cuda_verify.txt"
+                echo CUDA installation verified successfully.
+            )
+        ) else (
+            echo No CUDA support detected on this system. Using CPU-only PyTorch.
+        )
+    ) else (
+        echo PyTorch is already installed with CUDA support. Continuing...
+    )
+)
+
+REM Final verification of PyTorch installation
+echo Final verification of PyTorch installation...
+system\python.exe -c "import torch; print('PyTorch installed successfully. Version:', torch.__version__); print('CUDA Available:', torch.cuda.is_available()); print('CUDA Version:', torch.version.cuda if torch.cuda.is_available() else 'N/A (CPU only)')"
+
+REM Clean up temporary files
+del "%TEMP%\pytorch_check.txt" 2>nul
+del "%TEMP%\cuda_verify.txt" 2>nul
 
 REM Create system cache directory structure if it doesn't exist
 if not exist system\cache (
@@ -94,8 +217,25 @@ echo Ensuring models are in the local project directory...
 system\python.exe "%TEMP%\ensure_local_models.py"
 del "%TEMP%\ensure_local_models.py"
 
+REM Create a marker file to indicate that models have been downloaded
+set MODEL_PATH=%KOKORO_ROOT%\system\cache\HF_HOME\hub\models--hexgrad--Kokoro-82M
+set MARKER_FILE=%MODEL_PATH%\DOWNLOAD_COMPLETE
+
+if exist "%MODEL_PATH%" (
+    if not exist "%MARKER_FILE%" (
+        echo Creating marker file to indicate models are downloaded...
+        echo Models downloaded successfully > "%MARKER_FILE%"
+        echo Marker file created.
+    ) else (
+        echo Marker file already exists, using cached models.
+    )
+) else (
+    echo Model directory does not exist yet, will be created on first run.
+)
+
 REM Run the application directly
 echo Starting Kokoro TTS...
+echo The application will automatically open in your web browser when ready...
 system\python.exe kokoro\app.py
 
 echo.

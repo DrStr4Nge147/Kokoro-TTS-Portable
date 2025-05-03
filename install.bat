@@ -48,65 +48,9 @@ mkdir kokoro\custom_voices
 REM Set environment variables for the installation process
 call environment.bat
 
-REM Check for CUDA availability
-echo Checking for CUDA availability...
-set CUDA_AVAILABLE=0
-
-REM Check if nvidia-smi is available (simpler check for NVIDIA GPU)
-where nvidia-smi >nul 2>&1
-if %ERRORLEVEL% EQU 0 (
-    echo NVIDIA GPU detected. Will install PyTorch with CUDA support.
-    set CUDA_AVAILABLE=1
-) else (
-    REM Try alternative method - check for nvcc
-    where nvcc >nul 2>&1
-    if %ERRORLEVEL% EQU 0 (
-        echo CUDA toolkit found. Will install PyTorch with CUDA support.
-        set CUDA_AVAILABLE=1
-    ) else (
-        REM Try one more method - check for NVIDIA driver in registry
-        reg query "HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Services\nvlddmkm" >nul 2>&1
-        if %ERRORLEVEL% EQU 0 (
-            echo NVIDIA driver found in registry. Will install PyTorch with CUDA support.
-            set CUDA_AVAILABLE=1
-        ) else (
-            echo CUDA not detected. Will install CPU-only version of PyTorch.
-        )
-    )
-)
-
-REM Install PyTorch based on CUDA availability
-echo Installing PyTorch...
-if %CUDA_AVAILABLE% EQU 1 (
-    echo Installing PyTorch with CUDA support...
-
-    REM Install PyTorch with CUDA support
-    echo Installing PyTorch with CUDA 12.1 support...
-    system\python.exe -m pip install --no-cache-dir torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
-
-    REM Verify CUDA is available in PyTorch
-    echo Verifying CUDA installation...
-    system\python.exe -c "try: import torch; cuda_available = torch.cuda.is_available(); print('CUDA Available:', cuda_available); print('CUDA Version:', torch.version.cuda if cuda_available else 'N/A'); exit(0 if cuda_available else 1)\nexcept ImportError: print('PyTorch not installed properly'); exit(1)"
-
-    if %ERRORLEVEL% NEQ 0 (
-        echo CUDA installation verification failed. Falling back to CPU version...
-        echo Uninstalling current PyTorch...
-        system\python.exe -m pip uninstall -y torch torchvision torchaudio
-        echo Installing PyTorch CPU version...
-        system\python.exe -m pip install --no-cache-dir torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
-        echo Verification of CPU installation...
-        system\python.exe -c "try: import torch; print('Using CPU-only PyTorch:', not torch.cuda.is_available())\nexcept ImportError: print('PyTorch not installed properly')"
-    ) else (
-        echo CUDA installation verified successfully.
-    )
-) else (
-    echo Installing PyTorch CPU version...
-    system\python.exe -m pip install --no-cache-dir torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
-
-    REM Verify CPU-only installation
-    echo Verifying CPU installation...
-    system\python.exe -c "try: import torch; print('Using CPU-only PyTorch:', not torch.cuda.is_available())\nexcept ImportError: print('PyTorch not installed properly')"
-)
+REM Note: PyTorch installation has been moved to run.bat
+REM This allows the application to detect CUDA and install the appropriate PyTorch version at runtime
+REM This makes the application more portable and allows it to adapt to different hardware
 
 REM Install core dependencies first
 echo Installing core dependencies...
@@ -124,6 +68,7 @@ system\python.exe -m pip install accelerate
 system\python.exe -m pip install diffusers
 system\python.exe -m pip install espeakng-loader
 system\python.exe -m pip install phonemizer-fork
+system\python.exe -m pip install psutil
 REM Install docopt manually first to avoid circular dependency issue
 echo Installing docopt dependency...
 
